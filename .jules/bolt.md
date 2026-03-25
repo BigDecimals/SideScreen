@@ -1,0 +1,3 @@
+## 2024-05-24 - Zero-Allocation Touch Event Serialization
+**Learning:** In high-frequency callback loops like touch event handling (60-120Hz), allocating even small objects like `ByteBuffer` per event causes measurable GC churn that manifests as micro-stutters in the streaming pipeline.
+**Action:** Since network operations for touch/ping are serialized on a single-threaded CoroutineDispatcher (`touchScope`), a single reused `ByteBuffer` can be safely shared across all events without synchronization, eliminating garbage generation entirely. Additionally, reading Little-Endian primitive types from `DataInputStream` can be done zero-allocation using `java.lang.Long.reverseBytes(input.readLong())` instead of wrapping a `ByteArray`.
