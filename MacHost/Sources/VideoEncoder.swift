@@ -3,7 +3,7 @@ import VideoToolbox
 import CoreMedia
 
 class VideoEncoder {
-    private var compressionSession: VTCompressionSession?
+    var compressionSession: VTCompressionSession?
     var onEncodedFrame: ((Data, UInt64, Bool) -> Void)?  // data, timestamp, isKeyframe
     private var width: Int
     private var height: Int
