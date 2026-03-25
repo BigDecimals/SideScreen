@@ -198,7 +198,7 @@ class VideoDecoder(
         height: Int,
     ): String? {
         try {
-            val codecList = MediaCodecList(MediaCodecList.ALL_CODECS)
+            val codecList = cachedCodecList
             var hwDecoder: String? = null
             var swDecoder: String? = null
 
@@ -374,5 +374,10 @@ class VideoDecoder(
 
     companion object {
         private const val TAG = "VideoDecoder"
+
+        // Cache the codec list globally to avoid expensive system queries on every resolution change
+        private val cachedCodecList by lazy {
+            MediaCodecList(MediaCodecList.ALL_CODECS)
+        }
     }
 }
