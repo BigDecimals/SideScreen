@@ -34,6 +34,17 @@ class VideoEncoder {
         setupCompressionSession()
     }
 
+    func updateFrameRate(frameRate: Int) {
+        self.frameRate = frameRate
+
+        // Drain pending frames before invalidation
+        if let session = compressionSession {
+            VTCompressionSessionCompleteFrames(session, untilPresentationTimeStamp: .invalid)
+            VTCompressionSessionInvalidate(session)
+        }
+        setupCompressionSession()
+    }
+
     private func setupCompressionSession() {
         var session: VTCompressionSession?
 
