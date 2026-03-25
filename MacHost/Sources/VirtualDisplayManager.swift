@@ -2,12 +2,45 @@ import Foundation
 import CoreGraphics
 import CGVirtualDisplayBridge
 
+protocol DisplayInfoProviding {
+    func mainDisplayID() -> CGDirectDisplayID?
+    func displayPixelsWide(_ display: CGDirectDisplayID) -> Int
+    func displayPixelsHigh(_ display: CGDirectDisplayID) -> Int
+    func displayRefreshRate(_ display: CGDirectDisplayID) -> Int?
+}
+
+struct DefaultDisplayInfoProvider: DisplayInfoProviding {
+    func mainDisplayID() -> CGDirectDisplayID? {
+        return CGMainDisplayID()
+    }
+
+    func displayPixelsWide(_ display: CGDirectDisplayID) -> Int {
+        return Int(CGDisplayPixelsWide(display))
+    }
+
+    func displayPixelsHigh(_ display: CGDirectDisplayID) -> Int {
+        return Int(CGDisplayPixelsHigh(display))
+    }
+
+    func displayRefreshRate(_ display: CGDirectDisplayID) -> Int? {
+        if let mode = CGDisplayCopyDisplayMode(display) {
+            return Int(mode.refreshRate)
+        }
+        return nil
+    }
+}
+
 /// Manages virtual display creation and lifecycle using CGVirtualDisplay API
 @available(macOS 14.0, *)
 class VirtualDisplayManager {
     private var virtualDisplay: CGVirtualDisplay?
     private var displayDescriptor: CGVirtualDisplayDescriptor?
     private var displaySettings: CGVirtualDisplaySettings?
+    private let displayInfoProvider: DisplayInfoProviding
+
+    init(displayInfoProvider: DisplayInfoProviding = DefaultDisplayInfoProvider()) {
+        self.displayInfoProvider = displayInfoProvider
+    }
 
     var displayID: CGDirectDisplayID? {
         return virtualDisplay?.displayID
@@ -104,18 +137,15 @@ class VirtualDisplayManager {
 
     /// Clone the main display configuration
     func cloneMainDisplay() throws {
-        guard let mainDisplay = CGMainDisplayID() as CGDirectDisplayID? else {
+        guard let mainDisplay = displayInfoProvider.mainDisplayID() else {
             throw VirtualDisplayError.mainDisplayNotFound
         }
 
-        let width = Int(CGDisplayPixelsWide(mainDisplay))
-        let height = Int(CGDisplayPixelsHigh(mainDisplay))
+        let width = displayInfoProvider.displayPixelsWide(mainDisplay)
+        let height = displayInfoProvider.displayPixelsHigh(mainDisplay)
 
         // Get refresh rate
-        var refreshRate = 60
-        if let mode = CGDisplayCopyDisplayMode(mainDisplay) {
-            refreshRate = Int(mode.refreshRate)
-        }
+        let refreshRate = displayInfoProvider.displayRefreshRate(mainDisplay) ?? 60
 
         try createDisplay(
             width: width,
