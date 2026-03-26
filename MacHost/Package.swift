@@ -25,7 +25,7 @@ let package = Package(
         .testTarget(
             name: "SideScreenTests",
             dependencies: ["SideScreen"],
-            path: "Tests",
+            path: "Tests/SideScreenTests",
             cSettings: [
                 .unsafeFlags(["-I", "Sources"])
             ],
