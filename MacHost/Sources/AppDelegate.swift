@@ -363,7 +363,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     self.settings.captureMethod = method
                 }
             }
-            try await screenCapture?.setupForVirtualDisplay(displayID, refreshRate: settings.effectiveRefreshRate)
+            try await screenCapture?.setupForVirtualDisplay(displayID, refreshRate: settings.gamingBoost ? 120 : settings.refreshRate)
 
             // Setup server
             streamingServer = StreamingServer(port: settings.port)
@@ -396,7 +396,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 bitrateMbps: settings.effectiveBitrate,
                 quality: settings.effectiveQuality,
                 gamingBoost: settings.gamingBoost,
-                frameRate: settings.effectiveRefreshRate
+                frameRate: settings.gamingBoost ? 120 : settings.refreshRate
             )
 
             await MainActor.run {

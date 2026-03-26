@@ -961,10 +961,6 @@ class DisplaySettings: ObservableObject {
         return gamingBoost ? "ultralow" : quality
     }
 
-    var effectiveRefreshRate: Int {
-        return gamingBoost ? 120 : refreshRate
-    }
-
     func toggleServer() {
         onToggleServer?()
     }
