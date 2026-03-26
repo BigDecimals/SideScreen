@@ -692,7 +692,7 @@ struct SettingsView: View {
         // Use Process to launch a new instance after a short delay
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/bin/sh")
-        task.arguments = ["-c", "sleep 0.5 && open \"\(appPath)\""]
+        task.arguments = ["-c", "sleep 0.5 && open \"$1\"", "--", appPath]
 
         do {
             try task.run()
