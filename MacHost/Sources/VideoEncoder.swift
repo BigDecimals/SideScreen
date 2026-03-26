@@ -116,8 +116,11 @@ class VideoEncoder {
 
         // Use system uptime clock — MUST match DispatchTime.now().uptimeNanoseconds
         let captureNanos = DispatchTime.now().uptimeNanoseconds
-        let refconValue = UnsafeMutableRawPointer.allocate(byteCount: 8, alignment: 8)
-        refconValue.storeBytes(of: captureNanos, as: UInt64.self)
+
+        // ⚡ Bolt: Zero-cost abstraction for C callback
+        // Instead of allocating a pointer on the heap (1 malloc per frame), we pack the
+        // 64-bit integer timestamp directly into the pointer's 64-bit memory address space.
+        let refconValue = UnsafeMutableRawPointer(bitPattern: UInt(captureNanos))
 
         VTCompressionSessionEncodeFrame(
             session,
@@ -153,8 +156,9 @@ private let encodingOutputCallback: VTCompressionOutputCallback = { (outputCallb
     // Get timestamp for frame age tracking
     let timestamp: UInt64
     if let refcon = sourceFrameRefCon {
-        timestamp = refcon.load(as: UInt64.self)
-        refcon.deallocate()
+        // ⚡ Bolt: Unpack the integer from the pointer's memory address space.
+        // No deallocation needed since this was never allocated on the heap.
+        timestamp = UInt64(UInt(bitPattern: refcon))
     } else {
         timestamp = DispatchTime.now().uptimeNanoseconds
     }
