@@ -63,7 +63,6 @@ struct VisualEffectBlur: NSViewRepresentable {
 @available(macOS 14.0, *)
 struct SettingsView: View {
     @ObservedObject var settings: DisplaySettings
-    @State private var showPermissionAlert = false
     @State private var showResetConfirmation = false
     @State private var headerHovered = false
 
