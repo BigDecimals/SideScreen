@@ -30,13 +30,32 @@ struct DefaultDisplayInfoProvider: DisplayInfoProviding {
     }
 }
 
+/// Protocol to abstract CGVirtualDisplay for testing
+@available(macOS 14.0, *)
+protocol VirtualDisplayProtocol {
+    var displayID: UInt32 { get }
+    func applySettings(_ settings: CGVirtualDisplaySettings) -> Bool
+}
+
+@available(macOS 14.0, *)
+extension CGVirtualDisplay: VirtualDisplayProtocol {
+    func applySettings(_ settings: CGVirtualDisplaySettings) -> Bool {
+        return self.apply(settings)
+    }
+}
+
 /// Manages virtual display creation and lifecycle using CGVirtualDisplay API
 @available(macOS 14.0, *)
 class VirtualDisplayManager {
-    private var virtualDisplay: CGVirtualDisplay?
-    private var displayDescriptor: CGVirtualDisplayDescriptor?
-    private var displaySettings: CGVirtualDisplaySettings?
+    internal var virtualDisplay: VirtualDisplayProtocol?
+    internal var displayDescriptor: CGVirtualDisplayDescriptor?
+    internal var displaySettings: CGVirtualDisplaySettings?
     private let displayInfoProvider: DisplayInfoProviding
+
+    /// Factory for creating displays, allowing test injection
+    var displayFactory: (CGVirtualDisplayDescriptor) -> VirtualDisplayProtocol? = { descriptor in
+        return CGVirtualDisplay(descriptor: descriptor)
+    }
 
     init(displayInfoProvider: DisplayInfoProviding = DefaultDisplayInfoProvider()) {
         self.displayInfoProvider = displayInfoProvider
@@ -118,14 +137,14 @@ class VirtualDisplayManager {
         self.displaySettings = settings
 
         // Create virtual display
-        guard let display = CGVirtualDisplay(descriptor: descriptor) else {
+        guard let display = displayFactory(descriptor) else {
             throw VirtualDisplayError.creationFailed("Failed to create CGVirtualDisplay")
         }
 
         self.virtualDisplay = display
 
         // Apply settings
-        let result = display.apply(settings)
+        let result = display.applySettings(settings)
         if !result {
             destroyDisplay()
             throw VirtualDisplayError.settingsApplyFailed("Failed to apply settings")
