@@ -436,6 +436,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         print("⏹️ Server stopped")
     }
 
+    // MARK: - Testing Properties
+
+    // Allows bypassing the accessibility check during unit tests
+    var bypassAccessibilityCheckForTesting: Bool = false
+
     // MARK: - Gesture Properties
 
     private let eventSource = CGEventSource(stateID: .hidSystemState)
@@ -473,7 +478,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func handleTouch(x: Float, y: Float, action: Int, pointerCount: Int = 1, x2: Float = 0, y2: Float = 0) {
         guard settings.touchEnabled else { return }
 
-        if !AXIsProcessTrusted() {
+        if !bypassAccessibilityCheckForTesting && !AXIsProcessTrusted() {
             if !accessibilityWarningShown {
                 accessibilityWarningShown = true
                 print("⚠️  Accessibility not granted - touch ignored")
@@ -484,8 +489,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        guard let displayID = virtualDisplayManager?.displayID else { return }
-        let bounds = CGDisplayBounds(displayID)
+        // Use standard bounds if virtual display isn't setup for testing
+        let bounds: CGRect
+        if let displayID = virtualDisplayManager?.displayID {
+            bounds = CGDisplayBounds(displayID)
+        } else if bypassAccessibilityCheckForTesting {
+            bounds = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+        } else {
+            return
+        }
 
         let p1 = CGPoint(
             x: bounds.origin.x + CGFloat(x) * bounds.width,
@@ -704,59 +716,61 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Event Injection
 
+    var eventPoster: (CGEvent) -> Void = { $0.post(tap: .cghidEventTap) }
+
     private func moveCursor(to point: CGPoint) {
         if let event = CGEvent(mouseEventSource: eventSource, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left) {
-            event.post(tap: .cghidEventTap)
+            eventPoster(event)
         }
     }
 
     private func performClick(at point: CGPoint) {
         if let down = CGEvent(mouseEventSource: eventSource, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left) {
             down.setIntegerValueField(.mouseEventClickState, value: 1)
-            down.post(tap: .cghidEventTap)
+            eventPoster(down)
         }
         if let up = CGEvent(mouseEventSource: eventSource, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left) {
             up.setIntegerValueField(.mouseEventClickState, value: 1)
-            up.post(tap: .cghidEventTap)
+            eventPoster(up)
         }
     }
 
     private func performDoubleClick(at point: CGPoint) {
         if let down = CGEvent(mouseEventSource: eventSource, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left) {
             down.setIntegerValueField(.mouseEventClickState, value: 2)
-            down.post(tap: .cghidEventTap)
+            eventPoster(down)
         }
         if let up = CGEvent(mouseEventSource: eventSource, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left) {
             up.setIntegerValueField(.mouseEventClickState, value: 2)
-            up.post(tap: .cghidEventTap)
+            eventPoster(up)
         }
     }
 
     private func performRightClick(at point: CGPoint) {
         if let down = CGEvent(mouseEventSource: eventSource, mouseType: .rightMouseDown, mouseCursorPosition: point, mouseButton: .right) {
-            down.post(tap: .cghidEventTap)
+            eventPoster(down)
         }
         if let up = CGEvent(mouseEventSource: eventSource, mouseType: .rightMouseUp, mouseCursorPosition: point, mouseButton: .right) {
-            up.post(tap: .cghidEventTap)
+            eventPoster(up)
         }
     }
 
     private func injectMouseDown(at point: CGPoint) {
         if let event = CGEvent(mouseEventSource: eventSource, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left) {
             event.setIntegerValueField(.mouseEventClickState, value: 1)
-            event.post(tap: .cghidEventTap)
+            eventPoster(event)
         }
     }
 
     private func injectMouseDragged(to point: CGPoint) {
         if let event = CGEvent(mouseEventSource: eventSource, mouseType: .leftMouseDragged, mouseCursorPosition: point, mouseButton: .left) {
-            event.post(tap: .cghidEventTap)
+            eventPoster(event)
         }
     }
 
     private func injectMouseUp(at point: CGPoint) {
         if let event = CGEvent(mouseEventSource: eventSource, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left) {
-            event.post(tap: .cghidEventTap)
+            eventPoster(event)
         }
     }
 
@@ -770,7 +784,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             wheel3: 0
         ) else { return }
         scrollEvent.location = position
-        scrollEvent.post(tap: .cghidEventTap)
+        eventPoster(scrollEvent)
     }
 
     private func injectZoomEvent(delta: Int32, at position: CGPoint) {
@@ -785,7 +799,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         scrollEvent.location = position
         // Set Cmd flag for zoom
         scrollEvent.flags = .maskCommand
-        scrollEvent.post(tap: .cghidEventTap)
+        eventPoster(scrollEvent)
     }
 
     // MARK: - Long Press Timer
