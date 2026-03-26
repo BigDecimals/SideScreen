@@ -37,14 +37,14 @@ class StreamClient(
 
     // Buffer pooling to reduce GC pressure from per-frame allocations
     // At 60fps with ~100KB frames, this prevents ~6MB/s of allocations
-    private val bufferPool = ArrayDeque<ByteArray>(8)
+    internal val bufferPool = ArrayDeque<ByteArray>(8)
     private val poolLock = Any()
 
     /**
      * Acquire a buffer from pool or allocate new one if needed
      * @param minSize Minimum size required for the buffer
      */
-    private fun acquireBuffer(minSize: Int): ByteArray {
+    internal fun acquireBuffer(minSize: Int): ByteArray {
         synchronized(poolLock) {
             val iterator = bufferPool.iterator()
             while (iterator.hasNext()) {
