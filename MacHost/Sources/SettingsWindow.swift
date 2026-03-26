@@ -63,7 +63,6 @@ struct VisualEffectBlur: NSViewRepresentable {
 @available(macOS 14.0, *)
 struct SettingsView: View {
     @ObservedObject var settings: DisplaySettings
-    @State private var showPermissionAlert = false
     @State private var showResetConfirmation = false
     @State private var headerHovered = false
 
@@ -693,7 +692,7 @@ struct SettingsView: View {
         // Use Process to launch a new instance after a short delay
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/bin/sh")
-        task.arguments = ["-c", "sleep 0.5 && open \"\(appPath)\""]
+        task.arguments = ["-c", "sleep 0.5 && open \"$1\"", "--", appPath]
 
         do {
             try task.run()
@@ -960,10 +959,6 @@ class DisplaySettings: ObservableObject {
 
     var effectiveQuality: String {
         return gamingBoost ? "ultralow" : quality
-    }
-
-    var effectiveRefreshRate: Int {
-        return gamingBoost ? 120 : refreshRate
     }
 
     func toggleServer() {

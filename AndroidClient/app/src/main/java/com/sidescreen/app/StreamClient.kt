@@ -37,14 +37,14 @@ class StreamClient(
 
     // Buffer pooling to reduce GC pressure from per-frame allocations
     // At 60fps with ~100KB frames, this prevents ~6MB/s of allocations
-    private val bufferPool = ArrayDeque<ByteArray>(8)
+    internal val bufferPool = ArrayDeque<ByteArray>(8)
     private val poolLock = Any()
 
     /**
      * Acquire a buffer from pool or allocate new one if needed
      * @param minSize Minimum size required for the buffer
      */
-    private fun acquireBuffer(minSize: Int): ByteArray {
+    internal fun acquireBuffer(minSize: Int): ByteArray {
         synchronized(poolLock) {
             val iterator = bufferPool.iterator()
             while (iterator.hasNext()) {
@@ -87,6 +87,9 @@ class StreamClient(
         }
     private val touchDispatcher = touchExecutor.asCoroutineDispatcher()
     private val touchScope = CoroutineScope(touchDispatcher)
+
+    // Reused buffer for frequent touch and ping packets to reduce GC pressure
+    private val packetBuffer = ByteBuffer.allocate(32).order(ByteOrder.LITTLE_ENDIAN)
 
     suspend fun connect() =
         withContext(Dispatchers.IO) {
@@ -192,17 +195,18 @@ class StreamClient(
                 socket?.getOutputStream()?.let { out ->
                     val count = pointerCount.coerceIn(1, 2)
                     val size = 6 + count * 8 // 1 type + 1 count + N*(4x+4y) + 4 action
-                    val buffer = ByteBuffer.allocate(size).order(ByteOrder.LITTLE_ENDIAN)
-                    buffer.put(2.toByte())
-                    buffer.put(count.toByte())
-                    buffer.putFloat(x)
-                    buffer.putFloat(y)
+
+                    packetBuffer.clear()
+                    packetBuffer.put(2.toByte())
+                    packetBuffer.put(count.toByte())
+                    packetBuffer.putFloat(x)
+                    packetBuffer.putFloat(y)
                     if (count == 2) {
-                        buffer.putFloat(x2)
-                        buffer.putFloat(y2)
+                        packetBuffer.putFloat(x2)
+                        packetBuffer.putFloat(y2)
                     }
-                    buffer.putInt(action)
-                    out.write(buffer.array())
+                    packetBuffer.putInt(action)
+                    out.write(packetBuffer.array(), 0, size)
                     out.flush()
                 }
             } catch (_: Exception) {
@@ -221,10 +225,10 @@ class StreamClient(
         touchScope.launch {
             try {
                 socket?.getOutputStream()?.let { out ->
-                    val buffer = ByteBuffer.allocate(9).order(ByteOrder.LITTLE_ENDIAN)
-                    buffer.put(4.toByte()) // Type 4: ping
-                    buffer.putLong(System.nanoTime())
-                    out.write(buffer.array())
+                    packetBuffer.clear()
+                    packetBuffer.put(4.toByte()) // Type 4: ping
+                    packetBuffer.putLong(System.nanoTime())
+                    out.write(packetBuffer.array(), 0, 9)
                     out.flush()
                 }
             } catch (_: Exception) {
