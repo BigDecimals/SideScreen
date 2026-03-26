@@ -3,7 +3,7 @@ import VideoToolbox
 import CoreMedia
 
 class VideoEncoder {
-    private var compressionSession: VTCompressionSession?
+    var compressionSession: VTCompressionSession?
     var onEncodedFrame: ((Data, UInt64, Bool) -> Void)?  // data, timestamp, isKeyframe
     private var width: Int
     private var height: Int
@@ -116,8 +116,8 @@ class VideoEncoder {
 
         // Use system uptime clock — MUST match DispatchTime.now().uptimeNanoseconds
         let captureNanos = DispatchTime.now().uptimeNanoseconds
-        let refconValue = UnsafeMutableRawPointer.allocate(byteCount: 8, alignment: 8)
-        refconValue.storeBytes(of: captureNanos, as: UInt64.self)
+        // Pass the 64-bit integer directly as the pointer value to avoid per-frame heap allocation
+        let refconValue = UnsafeMutableRawPointer(bitPattern: UInt(captureNanos))
 
         VTCompressionSessionEncodeFrame(
             session,
@@ -153,8 +153,8 @@ private let encodingOutputCallback: VTCompressionOutputCallback = { (outputCallb
     // Get timestamp for frame age tracking
     let timestamp: UInt64
     if let refcon = sourceFrameRefCon {
-        timestamp = refcon.load(as: UInt64.self)
-        refcon.deallocate()
+        // Extract the 64-bit integer directly from the pointer value
+        timestamp = UInt64(UInt(bitPattern: refcon))
     } else {
         timestamp = DispatchTime.now().uptimeNanoseconds
     }
