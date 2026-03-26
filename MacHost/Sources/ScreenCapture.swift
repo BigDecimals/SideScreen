@@ -495,7 +495,18 @@ class ScreenCapture {
     // MARK: - Settings update
 
     func updateEncoderSettings(bitrateMbps: Int, quality: String, gamingBoost: Bool) {
+        currentBitrateMbps = bitrateMbps
+        currentQuality = quality
+        currentGamingBoost = gamingBoost
         encoder?.updateSettings(bitrateMbps: bitrateMbps, quality: quality, gamingBoost: gamingBoost)
+    }
+
+    func updateFrameRate(frameRate: Int) {
+        guard currentFrameRate != frameRate else { return }
+        debugLog("Updating frame rate to \(frameRate)fps")
+        currentFrameRate = frameRate
+        encoder?.updateFrameRate(frameRate: frameRate)
+        restartStream()
     }
 
     // MARK: - Stop streaming

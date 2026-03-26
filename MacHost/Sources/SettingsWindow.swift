@@ -327,7 +327,33 @@ struct SettingsView: View {
 
                         // Network Settings
                         FrostedGroupBox(title: "Network Settings", icon: "network") {
-                            VStack(alignment: .leading, spacing: 8) {
+                            VStack(alignment: .leading, spacing: 16) {
+                                // Connection Mode
+                                VStack(alignment: .leading, spacing: 8) {
+                                    HStack {
+                                        Text("Connection Mode")
+                                            .font(.system(size: 11))
+                                            .foregroundColor(.secondary)
+                                        Spacer()
+                                    }
+                                    Picker("", selection: $settings.connectionMode) {
+                                        Text("USB (ADB)").tag("usb")
+                                        Text("Wi-Fi").tag("wifi")
+                                    }
+                                    .pickerStyle(.segmented)
+                                    .disabled(settings.isRunning)
+
+                                    if settings.isRunning {
+                                        Text("Stop server to change connection mode")
+                                            .font(.system(size: 10))
+                                            .foregroundColor(.orange)
+                                    } else if settings.connectionMode == "wifi" {
+                                        Text("Requires Mac and Android to be on the same network.")
+                                            .font(.system(size: 10))
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+
                                 HStack {
                                     Text("Server Port")
                                         .font(.system(size: 11))
@@ -883,6 +909,9 @@ class DisplaySettings: ObservableObject {
     @Published var touchEnabled: Bool {
         didSet { save("touchEnabled", touchEnabled) }
     }
+    @Published var connectionMode: String {
+        didSet { save("connectionMode", connectionMode) }
+    }
 
     // Runtime state (not persisted)
     @Published var displayCreated = false
@@ -909,8 +938,9 @@ class DisplaySettings: ObservableObject {
         self.customWidth = defaults.object(forKey: keyPrefix + "customWidth") as? Int ?? 1920
         self.customHeight = defaults.object(forKey: keyPrefix + "customHeight") as? Int ?? 1200
         self.touchEnabled = defaults.object(forKey: keyPrefix + "touchEnabled") as? Bool ?? true
+        self.connectionMode = defaults.string(forKey: keyPrefix + "connectionMode") ?? "usb"
 
-        print("Loaded settings: \(resolution) @ \(refreshRate)Hz, bitrate=\(bitrate), quality=\(quality)")
+        print("Loaded settings: \(resolution) @ \(refreshRate)Hz, bitrate=\(bitrate), quality=\(quality), mode=\(connectionMode)")
     }
 
     private func save(_ key: String, _ value: Any) {
@@ -968,7 +998,7 @@ class DisplaySettings: ObservableObject {
     func resetToDefaults() {
         let keys = ["resolution", "refreshRate", "hiDPI", "bitrate", "quality",
                     "gamingBoost", "port", "rotation", "showAllResolutions",
-                    "customWidth", "customHeight", "touchEnabled"]
+                    "customWidth", "customHeight", "touchEnabled", "connectionMode"]
         for key in keys {
             defaults.removeObject(forKey: keyPrefix + key)
         }
@@ -985,6 +1015,7 @@ class DisplaySettings: ObservableObject {
         customWidth = 1920
         customHeight = 1200
         touchEnabled = true
+        connectionMode = "usb"
 
         print("Settings reset to defaults")
     }

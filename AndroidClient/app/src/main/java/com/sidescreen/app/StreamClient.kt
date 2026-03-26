@@ -29,6 +29,7 @@ class StreamClient(
     var onConnectionStatus: ((Boolean) -> Unit)? = null
     var onDisplaySize: ((Int, Int, Int) -> Unit)? = null // width, height, rotation
     var onStats: ((Double, Double) -> Unit)? = null
+    var onBitrateAdjustment: ((Int) -> Unit)? = null // target Mbps
 
     private var bytesReceived = 0L
     private var framesReceived = 0L
@@ -108,6 +109,10 @@ class StreamClient(
                 diagLog("Connected to $host:$port")
                 onConnectionStatus?.invoke(true)
 
+                // Send client info (type 0x06) upon connection
+                val mode = if (host == "127.0.0.1") "usb" else "wifi"
+                sendClientInfo(mode, android.os.Build.MODEL)
+
                 receiveData()
             } catch (e: Exception) {
                 Log.e(TAG, "❌ Connection error", e)
@@ -115,6 +120,28 @@ class StreamClient(
                 cleanup()
             }
         }
+
+    private fun sendClientInfo(mode: String, deviceModel: String) {
+        val modelBytes = deviceModel.toByteArray(Charsets.UTF_8)
+        val modeBytes = mode.toByteArray(Charsets.UTF_8)
+        val buf = ByteBuffer.allocate(3 + modelBytes.size + modeBytes.size)
+            .order(ByteOrder.BIG_ENDIAN)
+        buf.put(6.toByte())                        // type: client info
+        buf.put(modeBytes.size.toByte())
+        buf.put(modeBytes)
+        buf.put(modelBytes.size.toByte())
+        buf.put(modelBytes)
+
+        touchScope.launch {
+            try {
+                outputStream?.let { out ->
+                    out.write(buf.array())
+                    out.flush()
+                }
+            } catch (_: Exception) {
+            }
+        }
+    }
 
     private suspend fun receiveData() =
         withContext(Dispatchers.IO) {
@@ -160,7 +187,21 @@ class StreamClient(
                         5 -> { // Pong response — measure round-trip latency
                             val sentTime = java.lang.Long.reverseBytes(input.readLong())
                             val rtt = (System.nanoTime() - sentTime) / 1_000_000.0 // ms
+
+                            // Update rolling average
+                            if (rttSamples == 0) {
+                                rollingAverageRtt = rtt
+                            } else {
+                                rollingAverageRtt = (rollingAverageRtt * 0.8) + (rtt * 0.2)
+                            }
+                            rttSamples++
+
                             onLatencyMeasured?.invoke(rtt)
+                        }
+
+                        7 -> { // Bitrate adjustment
+                            val newBitrate = input.readUnsignedByte()
+                            onBitrateAdjustment?.invoke(newBitrate)
                         }
 
                         else -> {
@@ -219,6 +260,11 @@ class StreamClient(
     // Callback for latency measurement (round-trip ping/pong)
     var onLatencyMeasured: ((Double) -> Unit)? = null
 
+    // Rolling average of recent ping/pong RTTs
+    private var rollingAverageRtt: Double = 0.0
+    private var rttSamples = 0
+    private var lastBandwidthMbps: Double = 0.0
+
     /**
      * Send a ping to measure round-trip latency through the USB connection
      */
@@ -247,12 +293,33 @@ class StreamClient(
 
         if (elapsed >= 1000) {
             val mbps = (bytesReceived * 8.0) / (elapsed / 1000.0) / 1_000_000
+            lastBandwidthMbps = mbps
             val fps = (framesReceived * 1000.0) / elapsed
             onStats?.invoke(fps, mbps)
 
             bytesReceived = 0
             framesReceived = 0
             lastStatsTime = now
+        }
+    }
+
+    fun sendNetworkQualityReport(wifiBand: Byte) {
+        if (!isConnected || rttSamples == 0) return
+
+        touchScope.launch {
+            try {
+                outputStream?.let { out ->
+                    val buffer = ByteBuffer.allocate(10).order(ByteOrder.BIG_ENDIAN)
+                    buffer.put(8.toByte()) // Type 0x08: network quality report
+                    buffer.putFloat(rollingAverageRtt.toFloat())
+                    buffer.putFloat(lastBandwidthMbps.toFloat())
+                    buffer.put(wifiBand)
+
+                    out.write(buffer.array())
+                    out.flush()
+                }
+            } catch (_: Exception) {
+            }
         }
     }
 

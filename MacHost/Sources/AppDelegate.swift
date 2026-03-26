@@ -336,10 +336,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 settings.displayCreated = true
             }
 
-            // Run ADB setup and display init wait in parallel
+            // Run ADB setup (if in USB mode) and display init wait in parallel
             // ADB must complete before server starts (fixes race condition on first install)
             await withTaskGroup(of: Void.self) { group in
-                group.addTask { await self.setupADBReverse() }
+                if settings.connectionMode == "usb" {
+                    group.addTask { await self.setupADBReverse() }
+                }
                 group.addTask { try? await Task.sleep(nanoseconds: 500_000_000) }
             }
 
@@ -367,6 +369,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
             // Setup server
             streamingServer = StreamingServer(port: settings.port)
+            streamingServer?.connectionMode = settings.connectionMode
+            streamingServer?.frameRate = settings.refreshRate
+
             // Use physical pixel dimensions from the live display (accounts for HiDPI 2x scaling)
             let physWidth = screenCapture?.displayWidth ?? size.width
             let physHeight = screenCapture?.displayHeight ?? size.height
@@ -380,6 +385,36 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
             streamingServer?.onTouchEvent = { [weak self] x, y, action, pointerCount, x2, y2 in
                 self?.handleTouch(x: x, y: y, action: action, pointerCount: pointerCount, x2: x2, y2: y2)
+            }
+
+            let adaptiveBitrateController = AdaptiveBitrateController(initialBitrate: settings.effectiveBitrate)
+            adaptiveBitrateController.onBitrateChanged = { [weak self] newBitrate in
+                guard let self = self, self.settings.isRunning else { return }
+
+                // Update encoder and client
+                self.screenCapture?.updateEncoderSettings(
+                    bitrateMbps: newBitrate,
+                    quality: self.settings.effectiveQuality,
+                    gamingBoost: self.settings.gamingBoost
+                )
+                self.streamingServer?.sendBitrateUpdate(newBitrate)
+            }
+
+            streamingServer?.onNetworkReport = { [weak self] rttMs, bandwidthMbps, wifiBand in
+                guard let self = self, self.settings.isRunning else { return }
+
+                // Drive adaptive bitrate controller
+                adaptiveBitrateController.onNetworkReport(rttMs: rttMs, bandwidthMbps: bandwidthMbps, wifiBand: wifiBand)
+
+                // Handle frame rate adaptation for 2.4GHz
+                if wifiBand == 0x01 && self.settings.refreshRate > 30 {
+                    // Downgrade to 30fps on 2.4GHz to ensure stability
+                    Task { @MainActor in
+                        debugLog("Network report indicates 2.4GHz Wi-Fi — reducing frame rate to 30fps")
+                        self.settings.refreshRate = 30
+                        self.screenCapture?.updateFrameRate(frameRate: 30)
+                    }
+                }
             }
 
             streamingServer?.onStats = { [weak self] fps, mbps in

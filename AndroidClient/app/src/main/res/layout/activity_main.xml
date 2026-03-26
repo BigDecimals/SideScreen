@@ -197,7 +197,66 @@
                 android:gravity="center"
                 android:layout_marginBottom="24dp" />
 
-            <!-- Connection Checklist -->
+            <!-- Connection Mode Toggle -->
+            <com.google.android.material.button.MaterialButtonToggleGroup
+                android:id="@+id/connectionModeGroup"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center"
+                app:singleSelection="true"
+                app:selectionRequired="true"
+                android:layout_marginBottom="24dp">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnModeUsb"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="USB (ADB)"
+                    style="?attr/materialButtonOutlinedStyle" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnModeWifi"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Wi-Fi"
+                    style="?attr/materialButtonOutlinedStyle" />
+            </com.google.android.material.button.MaterialButtonToggleGroup>
+
+            <!-- Discovered Hosts List (Wi-Fi Mode) -->
+            <LinearLayout
+                android:id="@+id/discoveredHostsContainer"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:visibility="gone"
+                android:layout_marginBottom="24dp">
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Discovered Hosts"
+                    android:textColor="#FFFFFF"
+                    android:textSize="14sp"
+                    android:textStyle="bold"
+                    android:layout_marginBottom="12dp" />
+                <LinearLayout
+                    android:id="@+id/discoveredHostsList"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical" />
+                <TextView
+                    android:id="@+id/noHostsFoundText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Searching for Mac..."
+                    android:textColor="#BBBBBB"
+                    android:textSize="13sp"
+                    android:gravity="center"
+                    android:padding="16dp" />
+            </LinearLayout>
+
+            <!-- Connection Checklist (USB Mode) -->
             <LinearLayout
                 android:id="@+id/checklistContainer"
                 android:layout_width="match_parent"

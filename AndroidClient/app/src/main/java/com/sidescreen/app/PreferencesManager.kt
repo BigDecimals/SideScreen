@@ -36,4 +36,20 @@ class PreferencesManager(
     var settingsButtonCorner: Int
         get() = prefs.getInt("settings_corner", 0)
         set(value) = prefs.edit().putInt("settings_corner", value).apply()
+
+    var connectionMode: String
+        get() = prefs.getString("connectionMode", "USB") ?: "USB"
+        set(value) = prefs.edit().putString("connectionMode", value).apply()
+
+    var lastWifiHost: String?
+        get() = prefs.getString("lastWifiHost", null)
+        set(value) = prefs.edit().putString("lastWifiHost", value).apply()
+
+    var lastWifiPort: Int
+        get() = prefs.getInt("lastWifiPort", 8888)
+        set(value) = prefs.edit().putInt("lastWifiPort", value).apply()
+
+    var lastWifiName: String?
+        get() = prefs.getString("lastWifiName", null)
+        set(value) = prefs.edit().putString("lastWifiName", value).apply()
 }

@@ -1,6 +1,74 @@
 import Foundation
 import Network
 
+class AdaptiveBitrateController {
+    private var currentBitrateMbps: Int = 30
+    private var state: State = .steady
+    private var baselineRttMs: Double = 0
+    private var consecutiveIncreases = 0
+
+    enum State { case probingUp, steady, backingOff }
+
+    var onBitrateChanged: ((Int) -> Void)?
+
+    init(initialBitrate: Int) {
+        self.currentBitrateMbps = initialBitrate
+    }
+
+    func onNetworkReport(rttMs: Double, bandwidthMbps: Double, wifiBand: UInt8) {
+        let limits = bitrateLimits(for: wifiBand)
+
+        switch state {
+        case .steady:
+            if rttMs < 12.0 && wifiBand == 0x02 {
+                state = .probingUp
+                baselineRttMs = rttMs
+            } else if rttMs > 25.0 {
+                backOff(limits: limits)
+            }
+
+        case .probingUp:
+            if rttMs > baselineRttMs + 5.0 {
+                // RTT degraded — this bitrate is too high
+                currentBitrateMbps = Int(Double(currentBitrateMbps) * 0.9)
+                consecutiveIncreases = 0
+                state = .steady
+            } else {
+                currentBitrateMbps = min(Int(Double(currentBitrateMbps) * 1.1), limits.max)
+                consecutiveIncreases += 1
+                if consecutiveIncreases >= 3 { state = .steady }
+            }
+
+        case .backingOff:
+            break // timer-driven, not RTT-driven
+        }
+
+        onBitrateChanged?(currentBitrateMbps)
+    }
+
+    private func backOff(limits: (min: Int, max: Int)) {
+        currentBitrateMbps = max(Int(Double(currentBitrateMbps) * 0.75), limits.min)
+        state = .backingOff
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10.0) { [weak self] in
+            self?.state = .steady
+        }
+        onBitrateChanged?(currentBitrateMbps)
+    }
+
+    private func bitrateLimits(for wifiBand: UInt8) -> (min: Int, max: Int) {
+        switch wifiBand {
+        case 0x01: // 2.4GHz
+            return (8, 25)
+        case 0x02: // 5GHz
+            return (15, 60)
+        case 0x03: // 6GHz
+            return (20, 80)
+        default:
+            return (15, 30) // Unknown
+        }
+    }
+}
+
 class StreamingServer {
     private let port: UInt16
     private var listener: NWListener?
@@ -10,6 +78,7 @@ class StreamingServer {
     // Touch callback: (x1, y1, action, pointerCount, x2, y2)
     var onTouchEvent: ((Float, Float, Int, Int, Float, Float) -> Void)?
     var onStats: ((Double, Double) -> Void)?
+    var onNetworkReport: ((Double, Double, UInt8) -> Void)?
 
     private let frameQueue = DispatchQueue(label: "frameQueue", qos: .userInteractive)
     private let receiveQueue = DispatchQueue(label: "receiveQueue", qos: .userInteractive)
@@ -25,8 +94,19 @@ class StreamingServer {
     private var isStopped = false
     private var connectionReady = false
 
+    var connectionMode: String = "usb"
+    var frameRate: Int = 60
+
     init(port: UInt16) {
         self.port = port
+    }
+
+    private func getMacModel() -> String {
+        var size = 0
+        sysctlbyname("hw.model", nil, &size, nil, 0)
+        var model = [CChar](repeating: 0, count: size)
+        sysctlbyname("hw.model", &model, &size, nil, 0)
+        return String(cString: model)
     }
 
     func start() {
@@ -56,6 +136,21 @@ class StreamingServer {
                 default:
                     break
                 }
+            }
+
+            if connectionMode == "wifi" {
+                var txtRecord = NWTXTRecord()
+                txtRecord.setEntry(forKey: "v", value: "1")
+                txtRecord.setEntry(forKey: "model", value: getMacModel())
+                txtRecord.setEntry(forKey: "display", value: "\(displayWidth)x\(displayHeight)")
+                txtRecord.setEntry(forKey: "fps", value: "\(frameRate)")
+
+                listener?.service = NWListener.Service(
+                    name: nil,
+                    type: "_sidescreen._tcp.",
+                    domain: nil,
+                    txtRecord: txtRecord
+                )
             }
 
             listener?.start(queue: networkQueue)
@@ -131,6 +226,17 @@ class StreamingServer {
         return data
     }
 
+    func sendBitrateUpdate(_ newBitrateMbps: Int) {
+        guard let connection = connection else { return }
+
+        var data = Data()
+        data.append(7) // Type: Bitrate update
+        data.append(UInt8(min(max(newBitrateMbps, 0), 255)))
+
+        connection.send(content: data, completion: .contentProcessed { _ in })
+        debugLog("Sent bitrate update: \(newBitrateMbps)Mbps")
+    }
+
     private func startReceivingTouch() {
         guard !isReceiving else {
             debugLog("Already receiving touch events")
@@ -194,6 +300,35 @@ class StreamingServer {
                     pong.append(5) // Type: Pong
                     pong.append(clientTimestamp)
                     connection.send(content: pong, completion: .contentProcessed { _ in })
+                } else if msgType == 6 && data.count >= 3 {
+                    // Client Info (mode, device model)
+                    let modeLength = Int(data[1])
+                    if data.count >= 3 + modeLength {
+                        let modeData = data.subdata(in: 2..<(2 + modeLength))
+                        let modelLengthIdx = 2 + modeLength
+                        if data.count >= modelLengthIdx + 1 {
+                            let modelLength = Int(data[modelLengthIdx])
+                            if data.count >= modelLengthIdx + 1 + modelLength {
+                                let modelData = data.subdata(in: (modelLengthIdx + 1)..<(modelLengthIdx + 1 + modelLength))
+                                let modeString = String(data: modeData, encoding: .utf8) ?? "unknown"
+                                let modelString = String(data: modelData, encoding: .utf8) ?? "unknown"
+                                debugLog("Client Info: Mode=\(modeString), Model=\(modelString)")
+                            }
+                        }
+                    }
+                } else if msgType == 8 && data.count >= 10 {
+                    // Network Quality Report
+                    let rttMs = data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 1, as: Float.self) }
+                    let bandwidthMbps = data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 5, as: Float.self) }
+                    let wifiBand = data[9]
+
+                    // Note: Endianness is big endian from kotlin
+                    let rttMsDouble = Double(Float(bitPattern: UInt32(bigEndian: rttMs.bitPattern)))
+                    let bandwidthMbpsDouble = Double(Float(bitPattern: UInt32(bigEndian: bandwidthMbps.bitPattern)))
+
+                    DispatchQueue.main.async {
+                        self.onNetworkReport?(rttMsDouble, bandwidthMbpsDouble, wifiBand)
+                    }
                 }
             }
 

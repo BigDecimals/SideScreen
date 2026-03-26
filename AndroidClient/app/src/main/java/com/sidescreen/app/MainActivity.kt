@@ -63,6 +63,16 @@ class MainActivity : AppCompatActivity() {
     private var checklistRunnable: Runnable? = null
     private var isConnected = false // Track connection state to prevent checklist conflicts
 
+    // Wi-Fi Discovery
+    private lateinit var wifiDiscovery: WifiDiscovery
+    private val discoveredHosts = mutableListOf<WifiDiscovery.DiscoveredHost>()
+
+    // Multicast lock for older Android versions
+    private var multicastLock: android.net.wifi.WifiManager.MulticastLock? = null
+
+    // Network Quality Report Timer
+    private var networkReportJob: kotlinx.coroutines.Job? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -96,7 +106,33 @@ class MainActivity : AppCompatActivity() {
         setupSettingsButton()
         restoreOverlayPosition()
         restoreSettingsButtonPosition()
-        startChecklistUpdates()
+
+        wifiDiscovery = WifiDiscovery(this)
+
+        // Initial UI state setup based on connection mode
+        updateConnectionModeUI()
+
+        if (prefs.connectionMode == "USB") {
+            startChecklistUpdates()
+        } else {
+            startWifiDiscovery()
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
+            multicastLock = wifiManager.createMulticastLock("sidescreen_mdns")
+            multicastLock?.setReferenceCounted(true)
+            multicastLock?.acquire()
+        }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        multicastLock?.release()
+        multicastLock = null
     }
 
     /**
@@ -214,8 +250,136 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun updateConnectionModeUI() {
+        val isUsb = prefs.connectionMode == "USB"
+
+        binding.connectionModeGroup.check(if (isUsb) R.id.btnModeUsb else R.id.btnModeWifi)
+
+        if (isUsb) {
+            binding.checklistContainer.visibility = View.VISIBLE
+            binding.discoveredHostsContainer.visibility = View.GONE
+            binding.connectButton.text = "Connect"
+            binding.connectButton.visibility = View.VISIBLE
+            binding.hostInput.setText("127.0.0.1")
+        } else {
+            binding.checklistContainer.visibility = View.GONE
+            binding.discoveredHostsContainer.visibility = View.VISIBLE
+            binding.connectButton.visibility = View.GONE
+            binding.hostInput.setText("")
+        }
+    }
+
+    private fun startWifiDiscovery() {
+        wifiDiscovery.onHostFound = { host ->
+            runOnUiThread {
+                discoveredHosts.removeAll { it.name == host.name }
+                discoveredHosts.add(host)
+                updateDiscoveryUI()
+            }
+        }
+
+        wifiDiscovery.onHostLost = { name ->
+            runOnUiThread {
+                discoveredHosts.removeAll { it.name == name }
+                updateDiscoveryUI()
+            }
+        }
+
+        discoveredHosts.clear()
+        updateDiscoveryUI()
+
+        wifiDiscovery.startDiscovery()
+    }
+
+    @SuppressLint("SetTextI18n")
+    private fun updateDiscoveryUI() {
+        binding.discoveredHostsList.removeAllViews()
+
+        if (discoveredHosts.isEmpty()) {
+            binding.noHostsFoundText.visibility = View.VISIBLE
+            // Show manual connect button if list is empty after 5 seconds
+            binding.connectButton.text = "Connect Manually"
+            binding.connectButton.visibility = View.VISIBLE
+        } else {
+            binding.noHostsFoundText.visibility = View.GONE
+            binding.connectButton.visibility = View.GONE
+
+            for (host in discoveredHosts) {
+                val btn = MaterialButton(this).apply {
+                    text = "Connect to ${host.name}"
+                    setOnClickListener {
+                        connectToHost(host)
+                    }
+                    layoutParams = android.widget.LinearLayout.LayoutParams(
+                        android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                        android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+                    ).apply {
+                        setMargins(0, 0, 0, 16)
+                    }
+                }
+                binding.discoveredHostsList.addView(btn)
+            }
+        }
+
+        // Always show last successful connection as a quick option if available
+        if (prefs.lastWifiHost != null && prefs.lastWifiName != null) {
+            val lastBtn = MaterialButton(this).apply {
+                text = "Reconnect to ${prefs.lastWifiName}"
+                setBackgroundColor(android.graphics.Color.parseColor("#333333"))
+                setOnClickListener {
+                    connect(prefs.lastWifiHost!!, prefs.lastWifiPort)
+                }
+                layoutParams = android.widget.LinearLayout.LayoutParams(
+                    android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                    android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    setMargins(0, 0, 0, 16)
+                }
+            }
+            binding.discoveredHostsList.addView(lastBtn)
+            binding.noHostsFoundText.visibility = View.GONE
+        }
+    }
+
+    private fun connectToHost(host: WifiDiscovery.DiscoveredHost) {
+        wifiDiscovery.stopDiscovery()
+        prefs.lastWifiHost = host.host
+        prefs.lastWifiPort = host.port
+        prefs.lastWifiName = host.name
+        connect(host.host, host.port)
+    }
+
     private fun setupUI() {
+        binding.connectionModeGroup.addOnButtonCheckedListener { _, checkedId, isChecked ->
+            if (isChecked) {
+                val mode = if (checkedId == R.id.btnModeUsb) "USB" else "WIFI"
+                if (prefs.connectionMode != mode) {
+                    prefs.connectionMode = mode
+                    updateConnectionModeUI()
+
+                    if (mode == "USB") {
+                        wifiDiscovery.stopDiscovery()
+                        startChecklistUpdates()
+                    } else {
+                        stopChecklistUpdates()
+                        startWifiDiscovery()
+                    }
+                }
+            }
+        }
+
         binding.connectButton.setOnClickListener {
+            if (prefs.connectionMode == "WIFI") {
+                // Manual fallback connect for Wi-Fi
+                val host = binding.hostInput.text.toString().ifEmpty {
+                    showError("Please enter a Mac IP address in Advanced Settings")
+                    return@setOnClickListener
+                }
+                val port = binding.portInput.text.toString().toIntOrNull() ?: 8888
+                connect(host, port)
+                return@setOnClickListener
+            }
+
             var host =
                 binding.hostInput.text
                     .toString()
@@ -820,6 +984,10 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
 
+                streamClient?.onBitrateAdjustment = { newBitrate ->
+                    log("Bitrate adjusted to $newBitrate Mbps")
+                }
+
                 streamClient?.connect()
             } catch (e: Exception) {
                 val errorMessage =
@@ -867,11 +1035,34 @@ class MainActivity : AppCompatActivity() {
                     streamClient?.sendPing()
                 }
             }
+
+        networkReportJob?.cancel()
+        networkReportJob = lifecycleScope.launch(Dispatchers.IO) {
+            while (true) {
+                kotlinx.coroutines.delay(2000) // Report every 2 seconds
+                val wifiBand = getWifiBand(this@MainActivity)
+                streamClient?.sendNetworkQualityReport(wifiBand)
+            }
+        }
+    }
+
+    private fun getWifiBand(context: Context): Byte {
+        val wifiManager = context.getSystemService(android.net.wifi.WifiManager::class.java)
+        val info = wifiManager.connectionInfo
+        val freq = info.frequency  // MHz
+        return when {
+            freq in 2400..2500 -> 0x01
+            freq in 4900..5900 -> 0x02
+            freq in 5925..7125 -> 0x03
+            else -> 0x00
+        }
     }
 
     private fun stopPingTimer() {
         pingJob?.cancel()
         pingJob = null
+        networkReportJob?.cancel()
+        networkReportJob = null
     }
 
     private fun cleanup() {
@@ -997,6 +1188,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        wifiDiscovery.stopDiscovery()
         stopChecklistUpdates()
         cleanup()
     }
@@ -1029,6 +1221,9 @@ class MainActivity : AppCompatActivity() {
     private fun updateChecklist() {
         // Skip if connected (to prevent socket conflicts)
         if (isConnected) return
+
+        // Skip checklist completely in Wi-Fi mode
+        if (prefs.connectionMode == "WIFI") return
 
         // Check Developer Mode (if we can run this app with USB debugging, dev mode is enabled)
         val isDeveloperModeEnabled =
