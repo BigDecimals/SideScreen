@@ -19,6 +19,33 @@ private class StreamDelegate: NSObject, SCStreamDelegate {
     }
 }
 
+// MARK: - Display Mode Provider
+
+/// Protocol to abstract CoreGraphics display mode fetching for testing
+protocol DisplayModeProvider {
+    func copyDisplayModePhysicalSize(for displayID: CGDirectDisplayID) -> (width: Int, height: Int)?
+    func pixelsWide(for displayID: CGDirectDisplayID) -> Int
+    func pixelsHigh(for displayID: CGDirectDisplayID) -> Int
+}
+
+/// Default implementation using real CoreGraphics calls
+struct DefaultDisplayModeProvider: DisplayModeProvider {
+    func copyDisplayModePhysicalSize(for displayID: CGDirectDisplayID) -> (width: Int, height: Int)? {
+        if let mode = CGDisplayCopyDisplayMode(displayID) {
+            let w = mode.pixelWidth
+            let h = mode.pixelHeight
+            if w > 0 && h > 0 { return (w, h) }
+        }
+        return nil
+    }
+    func pixelsWide(for displayID: CGDirectDisplayID) -> Int {
+        return Int(CGDisplayPixelsWide(displayID))
+    }
+    func pixelsHigh(for displayID: CGDirectDisplayID) -> Int {
+        return Int(CGDisplayPixelsHigh(displayID))
+    }
+}
+
 // MARK: - ScreenCapture
 
 class ScreenCapture {
@@ -73,15 +100,13 @@ class ScreenCapture {
     /// Returns physical pixel dimensions for a display ID.
     /// CGDisplayPixelsWide/High return logical pixels on HiDPI displays — use
     /// CGDisplayModeGetPixelWidth/Height to always get the true physical size.
-    static func physicalSize(for displayID: CGDirectDisplayID) -> (width: Int, height: Int) {
-        if let mode = CGDisplayCopyDisplayMode(displayID) {
-            let w = mode.pixelWidth
-            let h = mode.pixelHeight
-            if w > 0 && h > 0 { return (w, h) }
+    static func physicalSize(for displayID: CGDirectDisplayID, provider: DisplayModeProvider = DefaultDisplayModeProvider()) -> (width: Int, height: Int) {
+        if let size = provider.copyDisplayModePhysicalSize(for: displayID) {
+            return size
         }
         // Mode lookup failed — falling back to logical pixels (may be stale on HiDPI display)
         debugLog("physicalSize fallback for display \(displayID) — CGDisplayCopyDisplayMode returned nil")
-        return (Int(CGDisplayPixelsWide(displayID)), Int(CGDisplayPixelsHigh(displayID)))
+        return (provider.pixelsWide(for: displayID), provider.pixelsHigh(for: displayID))
     }
 
     init() async throws {
@@ -470,7 +495,18 @@ class ScreenCapture {
     // MARK: - Settings update
 
     func updateEncoderSettings(bitrateMbps: Int, quality: String, gamingBoost: Bool) {
+        currentBitrateMbps = bitrateMbps
+        currentQuality = quality
+        currentGamingBoost = gamingBoost
         encoder?.updateSettings(bitrateMbps: bitrateMbps, quality: quality, gamingBoost: gamingBoost)
+    }
+
+    func updateFrameRate(frameRate: Int) {
+        guard currentFrameRate != frameRate else { return }
+        debugLog("Updating frame rate to \(frameRate)fps")
+        currentFrameRate = frameRate
+        encoder?.updateFrameRate(frameRate: frameRate)
+        restartStream()
     }
 
     // MARK: - Stop streaming

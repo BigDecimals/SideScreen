@@ -29,6 +29,7 @@ class StreamClient(
     var onConnectionStatus: ((Boolean) -> Unit)? = null
     var onDisplaySize: ((Int, Int, Int) -> Unit)? = null // width, height, rotation
     var onStats: ((Double, Double) -> Unit)? = null
+    var onBitrateAdjustment: ((Int) -> Unit)? = null // target Mbps
 
     private var bytesReceived = 0L
     private var framesReceived = 0L
@@ -37,14 +38,14 @@ class StreamClient(
 
     // Buffer pooling to reduce GC pressure from per-frame allocations
     // At 60fps with ~100KB frames, this prevents ~6MB/s of allocations
-    private val bufferPool = ArrayDeque<ByteArray>(8)
+    internal val bufferPool = ArrayDeque<ByteArray>(8)
     private val poolLock = Any()
 
     /**
      * Acquire a buffer from pool or allocate new one if needed
      * @param minSize Minimum size required for the buffer
      */
-    private fun acquireBuffer(minSize: Int): ByteArray {
+    internal fun acquireBuffer(minSize: Int): ByteArray {
         synchronized(poolLock) {
             val iterator = bufferPool.iterator()
             while (iterator.hasNext()) {
@@ -88,6 +89,12 @@ class StreamClient(
     private val touchDispatcher = touchExecutor.asCoroutineDispatcher()
     private val touchScope = CoroutineScope(touchDispatcher)
 
+    // Pre-allocated ByteBuffer for single-threaded touch/ping transmission.
+    // At 120Hz touch rates, this prevents thousands of short-lived ByteBuffer allocations,
+    // substantially reducing GC pause micro-stutters during gameplay.
+    // Safe to reuse because it is ONLY accessed within touchScope (single-threaded).
+    private val touchBuffer = ByteBuffer.allocate(32).order(ByteOrder.LITTLE_ENDIAN)
+
     suspend fun connect() =
         withContext(Dispatchers.IO) {
             try {
@@ -102,6 +109,10 @@ class StreamClient(
                 diagLog("Connected to $host:$port")
                 onConnectionStatus?.invoke(true)
 
+                // Send client info (type 0x06) upon connection
+                val mode = if (host == "127.0.0.1") "usb" else "wifi"
+                sendClientInfo(mode, android.os.Build.MODEL)
+
                 receiveData()
             } catch (e: Exception) {
                 Log.e(TAG, "❌ Connection error", e)
@@ -109,6 +120,28 @@ class StreamClient(
                 cleanup()
             }
         }
+
+    private fun sendClientInfo(mode: String, deviceModel: String) {
+        val modelBytes = deviceModel.toByteArray(Charsets.UTF_8)
+        val modeBytes = mode.toByteArray(Charsets.UTF_8)
+        val buf = ByteBuffer.allocate(3 + modelBytes.size + modeBytes.size)
+            .order(ByteOrder.BIG_ENDIAN)
+        buf.put(6.toByte())                        // type: client info
+        buf.put(modeBytes.size.toByte())
+        buf.put(modeBytes)
+        buf.put(modelBytes.size.toByte())
+        buf.put(modelBytes)
+
+        touchScope.launch {
+            try {
+                outputStream?.let { out ->
+                    out.write(buf.array())
+                    out.flush()
+                }
+            } catch (_: Exception) {
+            }
+        }
+    }
 
     private suspend fun receiveData() =
         withContext(Dispatchers.IO) {
@@ -152,11 +185,23 @@ class StreamClient(
                         }
 
                         5 -> { // Pong response — measure round-trip latency
-                            val buf = ByteArray(8)
-                            input.readFully(buf)
-                            val sentTime = ByteBuffer.wrap(buf).order(ByteOrder.LITTLE_ENDIAN).long
+                            val sentTime = java.lang.Long.reverseBytes(input.readLong())
                             val rtt = (System.nanoTime() - sentTime) / 1_000_000.0 // ms
+
+                            // Update rolling average
+                            if (rttSamples == 0) {
+                                rollingAverageRtt = rtt
+                            } else {
+                                rollingAverageRtt = (rollingAverageRtt * 0.8) + (rtt * 0.2)
+                            }
+                            rttSamples++
+
                             onLatencyMeasured?.invoke(rtt)
+                        }
+
+                        7 -> { // Bitrate adjustment
+                            val newBitrate = input.readUnsignedByte()
+                            onBitrateAdjustment?.invoke(newBitrate)
                         }
 
                         else -> {
@@ -192,17 +237,19 @@ class StreamClient(
                 socket?.getOutputStream()?.let { out ->
                     val count = pointerCount.coerceIn(1, 2)
                     val size = 6 + count * 8 // 1 type + 1 count + N*(4x+4y) + 4 action
-                    val buffer = ByteBuffer.allocate(size).order(ByteOrder.LITTLE_ENDIAN)
-                    buffer.put(2.toByte())
-                    buffer.put(count.toByte())
-                    buffer.putFloat(x)
-                    buffer.putFloat(y)
+
+                    touchBuffer.clear()
+                    touchBuffer.put(2.toByte())
+                    touchBuffer.put(count.toByte())
+                    touchBuffer.putFloat(x)
+                    touchBuffer.putFloat(y)
                     if (count == 2) {
-                        buffer.putFloat(x2)
-                        buffer.putFloat(y2)
+                        touchBuffer.putFloat(x2)
+                        touchBuffer.putFloat(y2)
                     }
-                    buffer.putInt(action)
-                    out.write(buffer.array())
+                    touchBuffer.putInt(action)
+
+                    out.write(touchBuffer.array(), 0, size)
                     out.flush()
                 }
             } catch (_: Exception) {
@@ -213,6 +260,11 @@ class StreamClient(
     // Callback for latency measurement (round-trip ping/pong)
     var onLatencyMeasured: ((Double) -> Unit)? = null
 
+    // Rolling average of recent ping/pong RTTs
+    private var rollingAverageRtt: Double = 0.0
+    private var rttSamples = 0
+    private var lastBandwidthMbps: Double = 0.0
+
     /**
      * Send a ping to measure round-trip latency through the USB connection
      */
@@ -221,10 +273,10 @@ class StreamClient(
         touchScope.launch {
             try {
                 socket?.getOutputStream()?.let { out ->
-                    val buffer = ByteBuffer.allocate(9).order(ByteOrder.LITTLE_ENDIAN)
-                    buffer.put(4.toByte()) // Type 4: ping
-                    buffer.putLong(System.nanoTime())
-                    out.write(buffer.array())
+                    touchBuffer.clear()
+                    touchBuffer.put(4.toByte()) // Type 4: ping
+                    touchBuffer.putLong(System.nanoTime())
+                    out.write(touchBuffer.array(), 0, 9)
                     out.flush()
                 }
             } catch (_: Exception) {
@@ -241,12 +293,33 @@ class StreamClient(
 
         if (elapsed >= 1000) {
             val mbps = (bytesReceived * 8.0) / (elapsed / 1000.0) / 1_000_000
+            lastBandwidthMbps = mbps
             val fps = (framesReceived * 1000.0) / elapsed
             onStats?.invoke(fps, mbps)
 
             bytesReceived = 0
             framesReceived = 0
             lastStatsTime = now
+        }
+    }
+
+    fun sendNetworkQualityReport(wifiBand: Byte) {
+        if (!isConnected || rttSamples == 0) return
+
+        touchScope.launch {
+            try {
+                outputStream?.let { out ->
+                    val buffer = ByteBuffer.allocate(10).order(ByteOrder.BIG_ENDIAN)
+                    buffer.put(8.toByte()) // Type 0x08: network quality report
+                    buffer.putFloat(rollingAverageRtt.toFloat())
+                    buffer.putFloat(lastBandwidthMbps.toFloat())
+                    buffer.put(wifiBand)
+
+                    out.write(buffer.array())
+                    out.flush()
+                }
+            } catch (_: Exception) {
+            }
         }
     }
 

@@ -57,3 +57,5 @@ docs/
 tmp/
 temp/
 *.tmp
+swift-5.9.2-RELEASE-ubuntu22.04/
+swift-5.9.2-RELEASE-ubuntu22.04.tar.gz

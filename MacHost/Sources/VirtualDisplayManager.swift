@@ -2,12 +2,64 @@ import Foundation
 import CoreGraphics
 import CGVirtualDisplayBridge
 
+protocol DisplayInfoProviding {
+    func mainDisplayID() -> CGDirectDisplayID?
+    func displayPixelsWide(_ display: CGDirectDisplayID) -> Int
+    func displayPixelsHigh(_ display: CGDirectDisplayID) -> Int
+    func displayRefreshRate(_ display: CGDirectDisplayID) -> Int?
+}
+
+struct DefaultDisplayInfoProvider: DisplayInfoProviding {
+    func mainDisplayID() -> CGDirectDisplayID? {
+        return CGMainDisplayID()
+    }
+
+    func displayPixelsWide(_ display: CGDirectDisplayID) -> Int {
+        return Int(CGDisplayPixelsWide(display))
+    }
+
+    func displayPixelsHigh(_ display: CGDirectDisplayID) -> Int {
+        return Int(CGDisplayPixelsHigh(display))
+    }
+
+    func displayRefreshRate(_ display: CGDirectDisplayID) -> Int? {
+        if let mode = CGDisplayCopyDisplayMode(display) {
+            return Int(mode.refreshRate)
+        }
+        return nil
+    }
+}
+
+/// Protocol to abstract CGVirtualDisplay for testing
+@available(macOS 14.0, *)
+protocol VirtualDisplayProtocol {
+    var displayID: UInt32 { get }
+    func applySettings(_ settings: CGVirtualDisplaySettings) -> Bool
+}
+
+@available(macOS 14.0, *)
+extension CGVirtualDisplay: VirtualDisplayProtocol {
+    func applySettings(_ settings: CGVirtualDisplaySettings) -> Bool {
+        return self.apply(settings)
+    }
+}
+
 /// Manages virtual display creation and lifecycle using CGVirtualDisplay API
 @available(macOS 14.0, *)
 class VirtualDisplayManager {
-    private var virtualDisplay: CGVirtualDisplay?
-    private var displayDescriptor: CGVirtualDisplayDescriptor?
-    private var displaySettings: CGVirtualDisplaySettings?
+    internal var virtualDisplay: VirtualDisplayProtocol?
+    internal var displayDescriptor: CGVirtualDisplayDescriptor?
+    internal var displaySettings: CGVirtualDisplaySettings?
+    private let displayInfoProvider: DisplayInfoProviding
+
+    /// Factory for creating displays, allowing test injection
+    var displayFactory: (CGVirtualDisplayDescriptor) -> VirtualDisplayProtocol? = { descriptor in
+        return CGVirtualDisplay(descriptor: descriptor)
+    }
+
+    init(displayInfoProvider: DisplayInfoProviding = DefaultDisplayInfoProvider()) {
+        self.displayInfoProvider = displayInfoProvider
+    }
 
     var displayID: CGDirectDisplayID? {
         return virtualDisplay?.displayID
@@ -85,14 +137,14 @@ class VirtualDisplayManager {
         self.displaySettings = settings
 
         // Create virtual display
-        guard let display = CGVirtualDisplay(descriptor: descriptor) else {
+        guard let display = displayFactory(descriptor) else {
             throw VirtualDisplayError.creationFailed("Failed to create CGVirtualDisplay")
         }
 
         self.virtualDisplay = display
 
         // Apply settings
-        let result = display.apply(settings)
+        let result = display.applySettings(settings)
         if !result {
             destroyDisplay()
             throw VirtualDisplayError.settingsApplyFailed("Failed to apply settings")
@@ -104,18 +156,15 @@ class VirtualDisplayManager {
 
     /// Clone the main display configuration
     func cloneMainDisplay() throws {
-        guard let mainDisplay = CGMainDisplayID() as CGDirectDisplayID? else {
+        guard let mainDisplay = displayInfoProvider.mainDisplayID() else {
             throw VirtualDisplayError.mainDisplayNotFound
         }
 
-        let width = Int(CGDisplayPixelsWide(mainDisplay))
-        let height = Int(CGDisplayPixelsHigh(mainDisplay))
+        let width = displayInfoProvider.displayPixelsWide(mainDisplay)
+        let height = displayInfoProvider.displayPixelsHigh(mainDisplay)
 
         // Get refresh rate
-        var refreshRate = 60
-        if let mode = CGDisplayCopyDisplayMode(mainDisplay) {
-            refreshRate = Int(mode.refreshRate)
-        }
+        let refreshRate = displayInfoProvider.displayRefreshRate(mainDisplay) ?? 60
 
         try createDisplay(
             width: width,
