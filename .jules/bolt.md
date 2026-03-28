@@ -1,0 +1,3 @@
+## 2024-05-18 - High-Frequency Event Loop GC Churn
+**Learning:** In Android's high-frequency event loops like touch tracking or network pings, allocating small objects per event (e.g., `ByteBuffer.allocate(size)` or creating `ByteArray` wrappers for reads) causes significant Garbage Collection (GC) churn. This leads to frame drops and latency spikes.
+**Action:** Use pre-allocated, reusable buffers (like a single `ByteBuffer` on a single-threaded dispatcher) and zero-allocation primitive reading methods (like `java.lang.Long.reverseBytes(input.readLong())`) to avoid per-event allocations completely.
