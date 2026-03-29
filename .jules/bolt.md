@@ -1,0 +1,3 @@
+## 2024-05-18 - [Optimizing Touch and Ping Paths in StreamClient]
+**Learning:** Reusing `ByteBuffer` instances inside a `CoroutineScope` bounded by a single-threaded dispatcher (like `touchScope`) is a safe and high-impact strategy to eliminate GC churn for rapidly firing events (like 60-120Hz touch events). Using zero-allocation primitive reads such as `java.lang.Long.reverseBytes(input.readLong())` also eliminates unnecessary intermediate array buffers.
+**Action:** When analyzing hot paths, especially network IO in loops or callbacks, look for per-event allocations like `ByteBuffer.allocate` or `ByteArray`. If the scope guarantees sequential access, lift the allocation to a shared, reusable buffer to reduce garbage collection overhead and potential micro-stutters.
