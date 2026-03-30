@@ -144,7 +144,7 @@
             android:layout_height="24dp"
             android:layout_gravity="center"
             android:src="@drawable/ic_settings"
-            android:tint="#FFFFFF" />
+            app:tint="#FFFFFF" />
     </androidx.cardview.widget.CardView>
 
     <!-- Modern Connection Panel -->
@@ -417,6 +417,8 @@
         android:id="@+id/logText"
         android:layout_width="0dp"
         android:layout_height="0dp"
-        android:visibility="gone" />
+        android:visibility="gone"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent" />
 
 </androidx.constraintlayout.widget.ConstraintLayout>

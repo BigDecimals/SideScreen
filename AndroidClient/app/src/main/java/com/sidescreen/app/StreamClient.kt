@@ -73,6 +73,10 @@ class StreamClient(
         }
     }
 
+    // Reusable buffer for small outgoing control messages (touch, ping)
+    // Protected by touchScope's single-thread guarantee
+    private val eventBuffer = ByteBuffer.allocate(32).order(ByteOrder.LITTLE_ENDIAN)
+
     // High-priority thread for touch events to minimize latency
     // Use THREAD_PRIORITY_DISPLAY instead of URGENT_DISPLAY to avoid starving system processes
     private val touchExecutor =
@@ -152,9 +156,7 @@ class StreamClient(
                         }
 
                         5 -> { // Pong response — measure round-trip latency
-                            val buf = ByteArray(8)
-                            input.readFully(buf)
-                            val sentTime = ByteBuffer.wrap(buf).order(ByteOrder.LITTLE_ENDIAN).long
+                            val sentTime = java.lang.Long.reverseBytes(input.readLong())
                             val rtt = (System.nanoTime() - sentTime) / 1_000_000.0 // ms
                             onLatencyMeasured?.invoke(rtt)
                         }
@@ -192,17 +194,17 @@ class StreamClient(
                 socket?.getOutputStream()?.let { out ->
                     val count = pointerCount.coerceIn(1, 2)
                     val size = 6 + count * 8 // 1 type + 1 count + N*(4x+4y) + 4 action
-                    val buffer = ByteBuffer.allocate(size).order(ByteOrder.LITTLE_ENDIAN)
-                    buffer.put(2.toByte())
-                    buffer.put(count.toByte())
-                    buffer.putFloat(x)
-                    buffer.putFloat(y)
+                    eventBuffer.clear()
+                    eventBuffer.put(2.toByte())
+                    eventBuffer.put(count.toByte())
+                    eventBuffer.putFloat(x)
+                    eventBuffer.putFloat(y)
                     if (count == 2) {
-                        buffer.putFloat(x2)
-                        buffer.putFloat(y2)
+                        eventBuffer.putFloat(x2)
+                        eventBuffer.putFloat(y2)
                     }
-                    buffer.putInt(action)
-                    out.write(buffer.array())
+                    eventBuffer.putInt(action)
+                    out.write(eventBuffer.array(), 0, size)
                     out.flush()
                 }
             } catch (_: Exception) {
@@ -221,10 +223,10 @@ class StreamClient(
         touchScope.launch {
             try {
                 socket?.getOutputStream()?.let { out ->
-                    val buffer = ByteBuffer.allocate(9).order(ByteOrder.LITTLE_ENDIAN)
-                    buffer.put(4.toByte()) // Type 4: ping
-                    buffer.putLong(System.nanoTime())
-                    out.write(buffer.array())
+                    eventBuffer.clear()
+                    eventBuffer.put(4.toByte()) // Type 4: ping
+                    eventBuffer.putLong(System.nanoTime())
+                    out.write(eventBuffer.array(), 0, 9)
                     out.flush()
                 }
             } catch (_: Exception) {
