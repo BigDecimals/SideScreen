@@ -198,36 +198,24 @@ class VideoDecoder(
         height: Int,
     ): String? {
         try {
-            val codecList = MediaCodecList(MediaCodecList.ALL_CODECS)
+            val hevcCodecs = getHevcCodecs()
             var hwDecoder: String? = null
             var swDecoder: String? = null
 
-            for (info in codecList.codecInfos) {
-                if (info.isEncoder) continue
-                val caps =
-                    try {
-                        info.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_HEVC)
-                    } catch (_: Exception) {
-                        continue
-                    }
-
-                val videoCaps = caps.videoCapabilities ?: continue
-                val isHardware =
-                    !info.name.startsWith("c2.android.") &&
-                        !info.name.startsWith("OMX.google.")
-                val supported = videoCaps.isSizeSupported(width, height)
+            for (info in hevcCodecs) {
+                val supported = info.videoCaps.isSizeSupported(width, height)
 
                 diagLog(
                     "HEVC decoder '${info.name}': " +
-                        "width=${videoCaps.supportedWidths}, " +
-                        "height=${videoCaps.supportedHeights}, " +
-                        "hw=$isHardware, supports ${width}x$height=$supported",
+                        "width=${info.videoCaps.supportedWidths}, " +
+                        "height=${info.videoCaps.supportedHeights}, " +
+                        "hw=${info.isHardware}, supports ${width}x$height=$supported",
                 )
 
                 if (supported) {
-                    if (isHardware && hwDecoder == null) {
+                    if (info.isHardware && hwDecoder == null) {
                         hwDecoder = info.name
-                    } else if (!isHardware && swDecoder == null) {
+                    } else if (!info.isHardware && swDecoder == null) {
                         swDecoder = info.name
                     }
                 }
@@ -374,5 +362,52 @@ class VideoDecoder(
 
     companion object {
         private const val TAG = "VideoDecoder"
+
+        private data class HevcCodecInfo(
+            val name: String,
+            val isHardware: Boolean,
+            val videoCaps: android.media.MediaCodecInfo.VideoCapabilities,
+        )
+
+        private var cachedHevcCodecs: List<HevcCodecInfo>? = null
+        private val codecLock = Any()
+
+        /**
+         * ⚡ Bolt Optimization: Cache the results of codec discovery globally during the application lifecycle.
+         * Iterating `MediaCodecList` and calling `getCapabilitiesForType` involves expensive IPC and parsing
+         * capability files. Caching these results globally prevents blocking execution, as the system's available
+         * decoders do not change while the app is running.
+         */
+        private fun getHevcCodecs(): List<HevcCodecInfo> {
+            synchronized(codecLock) {
+                cachedHevcCodecs?.let { return it }
+
+                val codecs = mutableListOf<HevcCodecInfo>()
+                try {
+                    val codecList = MediaCodecList(MediaCodecList.ALL_CODECS)
+                    for (info in codecList.codecInfos) {
+                        if (info.isEncoder) continue
+                        val caps =
+                            try {
+                                info.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_HEVC)
+                            } catch (_: Exception) {
+                                continue
+                            }
+
+                        val videoCaps = caps.videoCapabilities ?: continue
+                        val isHardware =
+                            !info.name.startsWith("c2.android.") &&
+                                !info.name.startsWith("OMX.google.")
+
+                        codecs.add(HevcCodecInfo(info.name, isHardware, videoCaps))
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to get HEVC codecs", e)
+                }
+
+                cachedHevcCodecs = codecs
+                return codecs
+            }
+        }
     }
 }
