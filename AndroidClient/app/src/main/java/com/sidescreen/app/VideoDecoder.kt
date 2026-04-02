@@ -198,37 +198,24 @@ class VideoDecoder(
         height: Int,
     ): String? {
         try {
-            val codecList = MediaCodecList(MediaCodecList.ALL_CODECS)
             var hwDecoder: String? = null
             var swDecoder: String? = null
 
-            for (info in codecList.codecInfos) {
-                if (info.isEncoder) continue
-                val caps =
-                    try {
-                        info.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_HEVC)
-                    } catch (_: Exception) {
-                        continue
-                    }
-
-                val videoCaps = caps.videoCapabilities ?: continue
-                val isHardware =
-                    !info.name.startsWith("c2.android.") &&
-                        !info.name.startsWith("OMX.google.")
-                val supported = videoCaps.isSizeSupported(width, height)
+            for (codec in hevcCodecs) {
+                val supported = codec.videoCaps.isSizeSupported(width, height)
 
                 diagLog(
-                    "HEVC decoder '${info.name}': " +
-                        "width=${videoCaps.supportedWidths}, " +
-                        "height=${videoCaps.supportedHeights}, " +
-                        "hw=$isHardware, supports ${width}x$height=$supported",
+                    "HEVC decoder '${codec.name}': " +
+                        "width=${codec.videoCaps.supportedWidths}, " +
+                        "height=${codec.videoCaps.supportedHeights}, " +
+                        "hw=${codec.isHardware}, supports ${width}x$height=$supported",
                 )
 
                 if (supported) {
-                    if (isHardware && hwDecoder == null) {
-                        hwDecoder = info.name
-                    } else if (!isHardware && swDecoder == null) {
-                        swDecoder = info.name
+                    if (codec.isHardware && hwDecoder == null) {
+                        hwDecoder = codec.name
+                    } else if (!codec.isHardware && swDecoder == null) {
+                        swDecoder = codec.name
                     }
                 }
             }
@@ -374,5 +361,37 @@ class VideoDecoder(
 
     companion object {
         private const val TAG = "VideoDecoder"
+
+        private class CachedCodec(
+            val name: String,
+            val isHardware: Boolean,
+            val videoCaps: android.media.MediaCodecInfo.VideoCapabilities,
+        )
+
+        // Cache the parsed list of HEVC decoders and their capabilities.
+        // MediaCodecList iteration and getCapabilitiesForType are expensive operations,
+        // and codec capabilities don't change during app execution.
+        private val hevcCodecs: List<CachedCodec> by lazy {
+            try {
+                val codecList = MediaCodecList(MediaCodecList.ALL_CODECS)
+                codecList.codecInfos.mapNotNull { info ->
+                    if (info.isEncoder) return@mapNotNull null
+                    val caps =
+                        try {
+                            info.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_HEVC)
+                        } catch (_: Exception) {
+                            return@mapNotNull null
+                        }
+                    val videoCaps = caps.videoCapabilities ?: return@mapNotNull null
+                    val isHardware =
+                        !info.name.startsWith("c2.android.") &&
+                            !info.name.startsWith("OMX.google.")
+                    CachedCodec(info.name, isHardware, videoCaps)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to initialize HEVC codec cache", e)
+                emptyList()
+            }
+        }
     }
 }
